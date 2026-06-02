@@ -23,6 +23,21 @@ context, sharing the filesystem, then returns only a summary to the parent.
 Key insight: "Process isolation gives context isolation for free."
 """
 
+'''
+这个文件展示了如何实现一个子代理（subagent）系统。
+
+主代理可以通过调用一个特殊的工具（task）来创建一个子代理。
+子代理在一个全新的上下文中运行，拥有自己的消息历史和工具集，但共享同一个文件系统。
+子代理完成它的任务后，只返回一个总结性的文本结果给主代理，而不暴露它的内部对话历史。
+这种设计允许主代理保持清晰的上下文，同时让子代理独立处理复杂的子任务。
+
+实现细节：
+- 定义了一个 run_subagent 函数，负责创建和运行子代理。
+- 子代理使用一个简化的工具集（CHILD_TOOLS），不包含递归调用 task 的能力，以避免无限嵌套。
+- 主代理在处理工具调用时，如果遇到 task 工具，就调用 run_subagent 来执行子代理，并将子代理的总结结果作为工具结果返回给主代理。
+- 其他工具（bash、read_file、write_file、edit_file）在主代理和子代理中都可用，子代理直接调用这些工具来完成任务。
+'''
+
 import os
 import subprocess
 from pathlib import Path
@@ -40,6 +55,8 @@ client = Anthropic(base_url=os.getenv("ANTHROPIC_BASE_URL"))
 MODEL = os.environ["MODEL_ID"]
 
 SYSTEM = f"You are a coding agent at {WORKDIR}. Use the task tool to delegate exploration or subtasks."
+
+# subagent 的 system prompt，强调它是一个子代理，完成任务后总结发现。
 SUBAGENT_SYSTEM = f"You are a coding subagent at {WORKDIR}. Complete the given task, then summarize your findings."
 
 
@@ -100,6 +117,7 @@ TOOL_HANDLERS = {
 }
 
 # Child gets all base tools except task (no recursive spawning)
+# 定义子代理的工具列表，包含基本工具但不包含 task 工具，以避免递归调用。
 CHILD_TOOLS = [
     {"name": "bash", "description": "Run a shell command.",
      "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
@@ -113,8 +131,12 @@ CHILD_TOOLS = [
 
 
 # -- Subagent: fresh context, filtered tools, summary-only return --
+# 定义一个函数 run_subagent 来运行子代理，接受一个 prompt 作为输入，返回一个总结性的文本结果。
 def run_subagent(prompt: str) -> str:
+    # 子代理的消息历史从一个新的用户消息开始，内容是传入的 prompt。子代理使用 SUBAGENT_SYSTEM 作为系统提示，CHILD_TOOLS 作为工具列表。
     sub_messages = [{"role": "user", "content": prompt}]  # fresh context
+
+    # 子代理循环，最多运行30轮，调用模型并处理工具调用，直到模型停止或达到轮数限制。子代理的结果只返回最后的文本内容。
     for _ in range(30):  # safety limit
         response = client.messages.create(
             model=MODEL, system=SUBAGENT_SYSTEM, messages=sub_messages,
@@ -131,10 +153,25 @@ def run_subagent(prompt: str) -> str:
                 results.append({"type": "tool_result", "tool_use_id": block.id, "content": str(output)[:50000]})
         sub_messages.append({"role": "user", "content": results})
     # Only the final text returns to the parent -- child context is discarded
+    # 注意这里与之前的 agent_loop 不同，子代理在完成后只返回最后的文本内容，而不返回工具调用结果或消息历史。
+    # 这实现了上下文隔离，主代理无法访问子代理的内部对话历史，只能得到一个总结性的结果。
     return "".join(b.text for b in response.content if hasattr(b, "text")) or "(no summary)"
 
 
 # -- Parent tools: base tools + task dispatcher --
+# 定义主代理的工具列表，包含子代理工具列表中的所有工具，以及一个额外的 task 工具，用于创建子代理。
+'''
+task工具格式：
+name："task" -- 工具名称
+description：工具描述，提示模型这个工具是用来创建子代理的。
+input_schema：工具的输入模式，要求输入一个对象，包含两个属性：
+- prompt：字符串类型，子代理的任务描述。
+- description：字符串类型，子任务的简短描述（可选）。
+
+调用task工具时，模型需要提供一个 prompt 来描述子代理的任务，以及一个可选的 description 来简要说明这个任务的内容。
+主代理在处理工具调用时，如果遇到 task 工具，就会调用 run_subagent 函数来执行子代理，并将子代理的总结结果作为工具结果返回给主代理。
+'''
+
 PARENT_TOOLS = CHILD_TOOLS + [
     {"name": "task", "description": "Spawn a subagent with fresh context. It shares the filesystem but not conversation history.",
      "input_schema": {"type": "object", "properties": {"prompt": {"type": "string"}, "description": {"type": "string", "description": "Short description of the task"}}, "required": ["prompt"]}},
@@ -153,7 +190,9 @@ def agent_loop(messages: list):
         results = []
         for block in response.content:
             if block.type == "tool_use":
+                # 如果工具调用是 task，调用 run_subagent 来执行子代理，并将子代理的总结结果作为工具结果返回给主代理。
                 if block.name == "task":
+                    
                     desc = block.input.get("description", "subtask")
                     print(f"> task ({desc}): {block.input['prompt'][:80]}")
                     output = run_subagent(block.input["prompt"])

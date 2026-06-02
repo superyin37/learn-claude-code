@@ -10,7 +10,7 @@ before each LLM call to deliver results.
     +-----------------+        +-----------------+
     | agent loop      |        | task executes   |
     | ...             |        | ...             |
-    | [LLM call] <---+------- | enqueue(result) |
+    | [LLM call]  <---+------- | enqueue(result) |
     |  ^drain queue   |        +-----------------+
     +-----------------+
 

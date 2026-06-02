@@ -22,6 +22,52 @@ Each task has a dependency graph (blockedBy/blocks).
 Key insight: "State that survives compression -- because it's outside the conversation."
 """
 
+
+'''
+s03 的 todo 已经能帮 agent 把大目标拆成几步。
+但 todo 仍然有两个明显限制：
+- 它更像当前会话里的临时清单
+- 它不擅长表达“谁先谁后、谁依赖谁”
+
+这一章要做的升级是：
+把“会话里的 todo”升级成“可持久化的任务图”。
+
+这个文件展示了如何实现一个持久化的任务系统。
+任务以 JSON 文件的形式保存在 .tasks/ 目录中，这样它们可以在上下文压缩后继续存在。
+每个任务都有一个依赖关系图，使用 blockedBy 和 blocks 字段来表示任务之间的依赖关系。
+例如，
+task_1.json 可能表示一个已完成的任务，
+task_2.json 可能表示一个被 task_1 阻塞的待处理任务，
+task_3.json 则可能表示一个被 task_2 阻塞的待处理任务。
+
+当 task_1 被标记为完成时，它会从 task_2 的 blockedBy 列表中移除，从而解锁 task_2。
+
+什么是任务
+
+这里的 task 指的是：
+一个可以被跟踪、被分配、被完成、被阻塞的小工作单元。
+它不是整段用户需求，而是用户需求拆出来的一小块工作。
+
+什么是依赖
+依赖的意思是：任务 B 必须等任务 A 完成，才能开始。
+
+什么是任务图
+任务图就是：任务节点 + 依赖连线
+
+点：每个任务
+线：谁依赖谁
+
+什么是 ready
+ready 的意思很简单：这条任务现在已经满足开工条件。
+也就是,自己还没开始,前置依赖已经全部完成。
+
+实现细节：
+- 定义了一个 TaskManager 类，负责管理任务的创建、读取、更新和列表操作。任务以 JSON 文件的形式保存在 .tasks/ 目录中。
+- 定义了一些工具函数，如 run_bash、run_read、run_write 和 run_edit，用于执行 shell 命令和文件操作。
+- 定义了一个 agent_loop 函数，负责与模型进行交互，处理模型的响应，并调用相应的工具函数。
+- 在主程序中，使用一个循环来接受用户输入，并将其添加到消息历史中，然后调用 agent_loop 来处理消息历史并与模型交互。
+'''
+
 import json
 import os
 import subprocess
