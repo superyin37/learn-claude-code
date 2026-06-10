@@ -239,8 +239,10 @@ def agent_loop(messages):
 
 - **新版主线：根目录 `s01-s20`**
   根目录下的 `s01_*` 到 `s20_*` 是新的主版本，也是当前推荐阅读路径。每章包含完整叙事 README、英文/日文译本、可运行的 `code.py`，以及必要的图示。
-- **旧版过渡：`docs/`、`agents/`、当前 `web/`**
+- **旧版过渡：`docs/{zh,en,ja}/s*.md`、`agents/`、当前 `web/`**
   这些仍保留旧 12 章体系，暂时用于已有读者、旧链接和 Web 平台过渡。
+- **实现板块文档：[`docs/zh/implementation-guide.md`](./docs/zh/implementation-guide.md)**
+  按 Agent Loop、权限与 Hooks、Memory、Prompt、恢复、调度自治、Worktree、MCP 等能力组织，新增板块以当前 `s01-s20/code.py` 为准。
 
 新读者请从根目录 `s01_agent_loop/` 读到 `s20_comprehensive/`。如果你是从旧链接或当前 Web 平台进入，大概率看到的是旧 12 章版本。旧版章节号和新版不完全一致，不要混用章节号。
 
@@ -395,7 +397,7 @@ learn-claude-code/
   s20_comprehensive/       # 终点章
   agents/                  # 旧 12 章可运行副本 + s_full.py
   skills/                  # s07 使用的 skill 文件
-  docs/                    # 旧 12 章文档，过渡期保留
+  docs/                    # 旧章节文档 + 中文 implementation 板块文档
   web/                     # 当前仍基于 docs/ 旧版内容生成
   tests/
 ```
