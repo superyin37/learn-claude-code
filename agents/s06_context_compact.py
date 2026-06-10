@@ -12,7 +12,7 @@ Three-layer compression pipeline so the agent can work forever:
             |
             v
     [Layer 1: micro_compact]        (silent, every turn)
-      Replace tool_result content older than last 3
+      Replace non-read_file tool_result content older than last 3
       with "[Previous: used {tool_name}]"
             |
             v
@@ -88,6 +88,7 @@ SYSTEM = f"You are a coding agent at {WORKDIR}. Use tools to solve tasks."
 THRESHOLD = 50000
 TRANSCRIPT_DIR = WORKDIR / ".transcripts"
 KEEP_RECENT = 3
+PRESERVE_RESULT_TOOLS = {"read_file"}
 
 # estimate_tokens 函数是一个粗略的令牌计数器，假设平均每个令牌占用4个字符。
 # 它通过将消息列表转换为字符串并计算其长度来估计总的令牌数，然后除以4得到一个近似值。
@@ -125,20 +126,23 @@ def micro_compact(messages: list) -> list:
                     if hasattr(block, "type") and block.type == "tool_use":
                         tool_name_map[block.id] = block.name
 
-    # Clear old results (keep last KEEP_RECENT)
-    # 遍历 tool_results 列表，除了最近的 KEEP_RECENT 个结果之外，将旧结果的内容替换为一个简短的占位符，
+    # Clear old results (keep last KEEP_RECENT). Preserve read_file outputs because
+    # they are reference material; compacting them forces the agent to re-read files.
     to_clear = tool_results[:-KEEP_RECENT]
     for _, _, result in to_clear:
-        if isinstance(result.get("content"), str) and len(result["content"]) > 100:
-            tool_id = result.get("tool_use_id", "")
-            tool_name = tool_name_map.get(tool_id, "unknown")
-            result["content"] = f"[Previous: used {tool_name}]"
+        if not isinstance(result.get("content"), str) or len(result["content"]) <= 100:
+            continue
+        tool_id = result.get("tool_use_id", "")
+        tool_name = tool_name_map.get(tool_id, "unknown")
+        if tool_name in PRESERVE_RESULT_TOOLS:
+            continue
+        result["content"] = f"[Previous: used {tool_name}]"
     return messages
 
 
 # -- Layer 2: auto_compact - save transcript, summarize, replace messages --
 # auto_compact 函数首先将完整的对话记录保存到磁盘上的一个文件中，然后调用语言模型生成一个总结性的文本，
-def auto_compact(messages: list) -> list:
+def auto_compact(messages: list, focus: str = "") -> list:
     # Save full transcript to disk
     # 将完整的对话记录保存到磁盘上的一个文件中，文件名包含当前的时间戳，以便后续参考。
     TRANSCRIPT_DIR.mkdir(exist_ok=True)
@@ -151,20 +155,25 @@ def auto_compact(messages: list) -> list:
     
     # Ask LLM to summarize
     # 调用语言模型生成一个总结性的文本，提示模型总结对话内容，并保留关键细节。将消息列表转换为字符串并附加到提示中，以供模型参考。
-    conversation_text = json.dumps(messages, default=str)[:80000]
+    conversation_text = json.dumps(messages, default=str)[-80000:]
+    focus_instruction = ""
+    if focus:
+        focus_instruction = f" Pay special attention to preserving details about: {focus}."
     response = client.messages.create(
         model=MODEL,
         messages=[{"role": "user", "content":
             "Summarize this conversation for continuity. Include: "
             "1) What was accomplished, 2) Current state, 3) Key decisions made. "
-            "Be concise but preserve critical details.\n\n" + conversation_text}],
+            "Be concise but preserve critical details."
+            f"{focus_instruction}\n\n" + conversation_text}],
         max_tokens=2000,
     )
-    summary = response.content[0].text
+    summary = next((block.text for block in response.content if hasattr(block, "text")), "")
+    if not summary:
+        summary = "No summary generated."
     # Replace all messages with compressed summary
     return [
         {"role": "user", "content": f"[Conversation compressed. Transcript: {transcript_path}]\n\n{summary}"},
-        {"role": "assistant", "content": "Understood. I have the context from the summary. Continuing."},
     ]
 
 
@@ -256,10 +265,12 @@ def agent_loop(messages: list):
             return
         results = []
         manual_compact = False
+        compact_focus = ""
         for block in response.content:
             if block.type == "tool_use":
                 if block.name == "compact":
                     manual_compact = True
+                    compact_focus = block.input.get("focus", "")
                     output = "Compressing..."
                 else:
                     handler = TOOL_HANDLERS.get(block.name)
@@ -267,13 +278,15 @@ def agent_loop(messages: list):
                         output = handler(**block.input) if handler else f"Unknown tool: {block.name}"
                     except Exception as e:
                         output = f"Error: {e}"
-                print(f"> {block.name}: {str(output)[:200]}")
+                print(f"> {block.name}:")
+                print(str(output)[:200])
                 results.append({"type": "tool_result", "tool_use_id": block.id, "content": str(output)})
         messages.append({"role": "user", "content": results})
         # Layer 3: manual compact triggered by the compact tool
         if manual_compact:
             print("[manual compact]")
-            messages[:] = auto_compact(messages)
+            messages[:] = auto_compact(messages, focus=compact_focus)
+            return
 
 
 if __name__ == "__main__":

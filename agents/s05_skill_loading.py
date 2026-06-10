@@ -71,6 +71,7 @@ loading 指“把某个 skill 的完整正文真正读进来”。
 import os
 import re
 import subprocess
+import yaml
 from pathlib import Path
 
 from anthropic import Anthropic
@@ -129,12 +130,10 @@ class SkillLoader:
             return {}, text
         
         # 否则，解析 YAML 前置内容，将其转换为一个字典，并返回该字典和正文内容。
-        meta = {}
-        # 将 YAML 前置内容按行分割，逐行解析出键值对，存储在 meta 字典中。
-        for line in match.group(1).strip().splitlines():
-            if ":" in line:
-                key, val = line.split(":", 1)
-                meta[key.strip()] = val.strip()
+        try:
+            meta = yaml.safe_load(match.group(1)) or {}
+        except yaml.YAMLError:
+            meta = {}
         return meta, match.group(2).strip()
 
     # get_descriptions 方法返回一个字符串，包含所有技能的名称和简短描述，供系统提示使用。
@@ -266,7 +265,8 @@ def agent_loop(messages: list):
                     output = handler(**block.input) if handler else f"Unknown tool: {block.name}"
                 except Exception as e:
                     output = f"Error: {e}"
-                print(f"> {block.name}: {str(output)[:200]}")
+                print(f"> {block.name}:")
+                print(str(output)[:200])
                 results.append({"type": "tool_result", "tool_use_id": block.id, "content": str(output)})
         messages.append({"role": "user", "content": results})
 
